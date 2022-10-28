@@ -1,4 +1,4 @@
-# Jenkins Automated Pipeline for Checkmarx Code scan
+# Jenkins Automated Pipeline for Checkmarx Code Scan
 This is a Jenkins Pipeline script for automated Checkmarx code scan and notification.
 
 
