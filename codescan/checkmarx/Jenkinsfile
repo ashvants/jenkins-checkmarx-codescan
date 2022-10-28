@@ -1,0 +1,91 @@
+def INCREMENTAL_STR = ""
+def PROJECT_STR = ""
+
+pipeline {
+    // trigger job at 2:30am everyday
+     triggers {
+     pollSCM('H H * * *')
+    }
+
+    agent any
+    parameters {
+        string(name: 'REF', defaultValue: 'develop', description: "Commit hash or tag to scan")
+        string(name: 'EMAIL', defaultValue: 'emailaddress.mydomain.com', description: 'Email notification')
+        booleanParam(name: 'INCREMENTAL', defaultValue: true, description: "Perform an incremental code scan")
+        booleanParam(name: 'FORCE_SCAN', defaultValue: false, description: "Force full scan (cannot be run while INCREMENTAL is true)")
+    }
+
+    environment {
+        PROJECT_PATH = "${env.WORKSPACE}"
+    }
+
+    options { disableConcurrentBuilds() }
+
+    stages {
+        stage('Clear dir') {
+            steps {
+                deleteDir()
+            }
+        }
+
+        stage('Checkout') {
+            steps {
+                   checkout scm                          
+                }
+        }
+        
+        stage('Scan Code') {
+            steps {
+                script {
+                        if(params.INCREMENTAL) {
+                            INCREMENTAL_STR = '-Incremental'
+                        } else if(params.FORCE_SCAN) {
+                            INCREMENTAL_STR = '-ForceScan'
+                        }
+                env.GIT_BRANCH = getGitBranchName().replaceAll('[\n\r]', '')
+                env.GIT_BRANCH_URL = scm.userRemoteConfigs[0].url
+                String PROJECT_DETAIL = "${env.JOB_NAME}"
+                PROJECT_STR = PROJECT_DETAIL.replaceAll("/.*", "");                 
+                }
+            
+            powershell returnStatus: true, script: ''' mkdir "${env:WORKSPACE}\\codescan\\logs" '''
+
+               withCredentials([string(credentialsId: "checkmarx-api-token", variable: 'CHECKMARX_API_TOKEN')]) {
+                bat """ 
+                    runCxConsole.cmd AsyncScan \
+                    -verbose -CxServer "https://dcxcheckmarx.service.anz" \
+                    -ProjectName "CxServer/YourProjectNameandPathInCheckMarx" \
+                    -CxToken ${CHECKMARX_API_TOKEN} \
+                    -LocationType folder \
+                    -LocationPath %PROJECT_PATH% \
+                    -preset all \
+                    -reportpdf "${env.WORKSPACE}\\codescan\\logs\\${PROJECT_STR}_${env.BUILD_NUMBER}.pdf" \
+                    -log "${env.WORKSPACE}\\codescan\\logs\\${PROJECT_STR}_${env.BUILD_NUMBER}.log" \
+                    """  + "${INCREMENTAL_STR}"
+                }
+            }    
+        }
+    }
+    
+    post {
+        always {
+            emailext (
+                to: "${params.EMAIL}",
+                from: "MyJenkins@mydomain.com",
+                subject: "JENKINS BUILD - ${PROJECT_STR} - ${currentBuild.currentResult}",
+                attachmentsPattern: "codescan/**/logs/*",
+                body: """<p><h3><u> JENKINS BUILD DETAIL - ${PROJECT_STR}_${env.BUILD_NUMBER} </u></h3><br>
+                        <b>JOB: </b> ${env.JOB_NAME} <br><br>
+                        <b>BUILD STATUS: </b> ${currentBuild.currentResult} <br><br>
+                        <b>DURATION: </b> ${currentBuild.durationString} <br><br>
+                        <b>GIT BRANCH: </b> <a href='${env.GIT_BRANCH_URL}'>${env.GIT_BRANCH}</a> <br><br>
+                        <b>CODESCAN RESULT: </b> Refer attached blackduck and Checkmarx codescan logs <br>
+                        <br>Check console output at <a href='${env.BUILD_URL}'>${env.JOB_NAME} [${env.BUILD_NUMBER}]</a></p>""",
+            )  
+            
+        }
+    }
+}
+def getGitBranchName() {
+    return scm.branches[0].name
+}
